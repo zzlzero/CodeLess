@@ -54,6 +54,7 @@ def len_reward_func(completions, **kwargs):
 def correct_code_reward_func(prompts, completions, test_list, **kwargs):
     generations = []
     references = []
+    rewards = []
     for prompt, test, completion in zip(prompts, test_list, completions):
         print("prompt:")
         print(prompt)
@@ -62,13 +63,35 @@ def correct_code_reward_func(prompts, completions, test_list, **kwargs):
         generation = task.postprocess_generation(completion)
         print("postprocess generation:")
         print(generation)
-        reference = ''.join(test)
+        reference = '\n'.join(test)
+        test_program = generation + "\n" + reference
+        print("test_program:")
+        print(test_program)
+        
+        # 执行测试代码并检查是否通过
+        try:
+            # 创建临时命名空间，避免污染全局命名空间
+            local_namespace = {}
+            # 执行生成的代码和测试
+            exec(test_program, {"__builtins__": __builtins__}, local_namespace)
+            # 如果执行到这里没有异常，说明测试通过
+            rewards.append(1.0)
+            
+            # 记录成功样本（可选）
+            if random.random() < 0.10:  # 10% 的概率记录成功样本
+                os.makedirs("completion_samples", exist_ok=True)
+                log_file = os.path.join("completion_samples", "success_code_samples.txt")
+                with open(log_file, "a") as f:
+                    f.write(f"\n\n==============\n")
+                    f.write(f"Prompt:\n{prompt}\n\nGeneration:\n{generation}\n\nTest:\n{reference}\n")
+        except Exception as e:
+            # 测试未通过，奖励为0
+            print(f"Test failed with error: {str(e)}")
+            rewards.append(0.0)
+        
+        print(f"Reward: {rewards[-1]}")
 
-        generations.append(generation)
-        references.append(reference)
-    result = task.process_results(generations, references)
-    print(result)
-    return result
+    return rewards
 
 def equation_reward_func(completions, target, nums, **kwargs):
     """
