@@ -47,7 +47,7 @@ def len_reward_func(completions, **kwargs):
     for completion in completions:
 
         generation = task.postprocess_generation(completion)
-        rewards.append(0.5 - ((len(completion) - len(generation)) / len(generation)))
+        rewards.append(0.5 - ((len(completion) - len(generation)) / (max_len - len(generation) + 1e-6)))
     return rewards
 
 
@@ -56,17 +56,17 @@ def correct_code_reward_func(prompts, completions, test_list, **kwargs):
     references = []
     rewards = []
     for prompt, test, completion in zip(prompts, test_list, completions):
-        print("prompt:")
-        print(prompt)
-        print("preposcess generation:")
-        print(completion)
+        # print("prompt:")
+        # print(prompt)
+        # print("preposcess generation:")
+        # print(completion)
         generation = task.postprocess_generation(completion)
-        print("postprocess generation:")
-        print(generation)
+        # print("postprocess generation:")
+        # print(generation)
         reference = '\n'.join(test)
         test_program = generation + "\n" + reference
-        print("test_program:")
-        print(test_program)
+        # print("test_program:")
+        # print(test_program)
         
         # 执行测试代码并检查是否通过
         try:
@@ -77,7 +77,7 @@ def correct_code_reward_func(prompts, completions, test_list, **kwargs):
             # 如果执行到这里没有异常，说明测试通过
             rewards.append(1.0)
             
-            # 记录成功样本（可选）
+            # 记录成功样本
             if random.random() < 0.10:  # 10% 的概率记录成功样本
                 os.makedirs("completion_samples", exist_ok=True)
                 log_file = os.path.join("completion_samples", "success_code_samples.txt")
@@ -93,61 +93,6 @@ def correct_code_reward_func(prompts, completions, test_list, **kwargs):
 
     return rewards
 
-def equation_reward_func(completions, target, nums, **kwargs):
-    """
-    Evaluates completions based on:
-    2. Mathematical correctness of the answer
-
-    Args:
-        completions (list[str]): Generated outputs
-        target (list[str]): Expected answers
-        nums (list[str]): Available numbers
-    
-    Returns:
-        list[float]: Reward scores
-    """
-    rewards = []
-    for completion, gt, numbers in zip(completions, target, nums):
-      try:
-        # add synthetic <think> as its already part of the prompt and prefilled for the assistant to more easily match the regex
-        completion = "<think>" + completion
-        # Check if the format is correct
-        match = re.search(r"<answer>(.*?)<\/answer>", completion)
-        if match is None:
-            rewards.append(0.0)
-            continue
-        # Extract the "answer" part from the completion
-        equation = match.group(1).strip()
-        # Extract all numbers from the equation
-        used_numbers = [int(n) for n in re.findall(r'\d+', equation)]
-        
-        # Check if all numbers are used exactly once
-        if sorted(used_numbers) != sorted(numbers):
-            rewards.append(0.0)
-            continue
-        # Define a regex pattern that only allows numbers, operators, parentheses, and whitespace
-        allowed_pattern = r'^[\d+\-*/().\s]+$'
-        if not re.match(allowed_pattern, equation):
-           rewards.append(0.0)
-           continue
-        
-        # Evaluate the equation with restricted globals and locals
-        result = eval(equation, {"__builtins__": None}, {})
-        # Check if the equation is correct and matches the ground truth
-        if abs(float(result) - float(gt)) < 1e-5:
-            rewards.append(1.0)
-            if random.random() < 0.10:  # 10% chance to write fully successful samples into a file
-                os.makedirs("completion_samples", exist_ok=True)
-                log_file = os.path.join("completion_samples", "success_completion_samples.txt")
-                with open(log_file, "a") as f:
-                    f.write(f"\n\n==============\n")
-                    f.write(completion)
-        else:
-            rewards.append(0.0)
-      except Exception:
-            # If evaluation fails, reward is 0
-            rewards.append(0.0) 
-    return rewards
 
 def get_checkpoint(training_args: GRPOConfig):
     last_checkpoint = None
@@ -203,24 +148,7 @@ def grpo_function(
         prompt = f'"""\n{description}\n{test_example}\n"""\n'
         return prompt
 
-
-    # gemerate r1 prompt with a prefix for the model to already start with the thinking process
-    def generate_r1_prompt(numbers, target):
-        r1_prefix = [{
-            "role": "system",
-            "content": "You are a helpful assistant. You first thinks about the reasoning process in the mind and then provides the user with the answer."
-          },
-          { 
-            "role": "user",
-            "content": f"Using the numbers {numbers}, create an equation that equals {target}. You can use basic arithmetic operations (+, -, *, /) one or multiple times but each number can only be used once. Show your work in <think> </think> tags. And return the final equation in <answer> </answer> tags, for example <answer> (1 + 2) / 3 </answer>. Think step by step inside <think> tags."
-          },
-          {
-            "role": "assistant",
-            "content": "Let me solve this step by step.\n<think>"
-          }]
-        return {"prompt": tokenizer.apply_chat_template(r1_prefix, tokenize=False, continue_final_message=True), "target": target, "nums": numbers}
-
-    # convert our dataset to the prompt
+    # convert dataset to the prompt
     dataset = dataset.map(lambda x: {"prompt": get_prompt(x)})
 
     # split the dataset into train and test
