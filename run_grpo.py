@@ -78,7 +78,7 @@ def correct_code_reward_func(prompts, completions, test_list, **kwargs):
             rewards.append(1.0)
             
             # 记录成功样本
-            if random.random() < 0.10:  # 10% 的概率记录成功样本
+            if torch.rand(1).item() < 0.10:  # 10% 的概率记录成功样本
                 os.makedirs("completion_samples", exist_ok=True)
                 log_file = os.path.join("completion_samples", "success_code_samples.txt")
                 with open(log_file, "a") as f:
