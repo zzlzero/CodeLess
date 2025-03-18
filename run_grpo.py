@@ -12,6 +12,8 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers import AutoTokenizer
 from datasets import load_dataset
 from trl import GRPOConfig, GRPOTrainer, get_peft_config, ModelConfig, TrlParser
+import threading
+import time
 
 
 ########################
@@ -50,44 +52,63 @@ def len_reward_func(completions, **kwargs):
         rewards.append(0.5 - ((len(completion) - len(generation)) / (max_len - len(generation) + 1e-6)))
     return rewards
 
+import signal
+
+
 
 def correct_code_reward_func(prompts, completions, test_list, **kwargs):
     generations = []
     references = []
     rewards = []
+    
     for prompt, test, completion in zip(prompts, test_list, completions):
-        # print("prompt:")
-        # print(prompt)
-        # print("preposcess generation:")
-        # print(completion)
         generation = task.postprocess_generation(completion)
-        # print("postprocess generation:")
-        # print(generation)
         reference = '\n'.join(test)
         test_program = generation + "\n" + reference
-        # print("test_program:")
-        # print(test_program)
         
-        # 执行测试代码并检查是否通过
-        try:
-            # 创建临时命名空间，避免污染全局命名空间
-            local_namespace = {}
-            # 执行生成的代码和测试
-            exec(test_program, {"__builtins__": __builtins__}, local_namespace)
-            # 如果执行到这里没有异常，说明测试通过
-            rewards.append(1.0)
-            
-            # 记录成功样本
-            if torch.rand(1).item() < 0.10:  # 10% 的概率记录成功样本
-                os.makedirs("completion_samples", exist_ok=True)
-                log_file = os.path.join("completion_samples", "success_code_samples.txt")
-                with open(log_file, "a") as f:
-                    f.write(f"\n\n==============\n")
-                    f.write(f"Prompt:\n{prompt}\n\nGeneration:\n{generation}\n\nTest:\n{reference}\n")
-        except Exception as e:
-            # 测试未通过，奖励为0
-            print(f"Test failed with error: {str(e)}")
+        # 创建临时命名空间，避免污染全局命名空间
+        local_namespace = {}
+        
+        # 使用线程而非信号实现超时机制
+        execution_result = {"success": False, "error": None}
+        
+        def execute_code():
+            try:
+                exec(test_program, {"__builtins__": __builtins__}, local_namespace)
+                execution_result["success"] = True
+            except Exception as e:
+                execution_result["error"] = e
+        
+        # 创建线程并运行
+        thread = threading.Thread(target=execute_code)
+        thread.daemon = True  # 设置为守护线程，确保主程序退出时线程也会退出
+        thread.start()
+        
+        # 等待线程完成或超时
+        thread.join(timeout=5)  # 5秒超时
+        
+        if thread.is_alive():
+            # 线程仍在运行，说明执行超时
+            print("Test timeout: 执行代码超时")
             rewards.append(0.0)
+        else:
+            # 线程已结束，检查执行结果
+            if execution_result["success"]:
+                # 测试通过
+                rewards.append(1.0)
+                
+                # 记录成功样本
+                if torch.rand(1).item() < 0.10:  # 10% 的概率记录成功样本
+                    os.makedirs("completion_samples", exist_ok=True)
+                    log_file = os.path.join("completion_samples", "success_code_samples.txt")
+                    with open(log_file, "a") as f:
+                        f.write(f"\n\n==============\n")
+                        f.write(f"Prompt:\n{prompt}\n\nGeneration:\n{generation}\n\nTest:\n{reference}\n")
+            else:
+                # 测试失败
+                error = execution_result["error"]
+                print(f"Test failed with error: {str(error)}")
+                rewards.append(0.0)
         
         print(f"Reward: {rewards[-1]}")
 
