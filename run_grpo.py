@@ -66,35 +66,24 @@ def correct_code_reward_func(prompts, completions, test_list, **kwargs):
         reference = '\n'.join(test)
         test_program = generation + "\n" + reference
         
-        # 创建临时命名空间，避免污染全局命名空间
-        local_namespace = {}
+        # 创建临时文件用于执行代码
+        import tempfile
+        import subprocess
         
-        # 使用线程而非信号实现超时机制
-        execution_result = {"success": False, "error": None}
+        # 创建临时文件
+        with tempfile.NamedTemporaryFile(suffix='.py', delete=False) as temp_file:
+            temp_filename = temp_file.name
+            temp_file.write(test_program.encode('utf-8'))
         
-        def execute_code():
-            try:
-                exec(test_program, {"__builtins__": __builtins__}, local_namespace)
-                execution_result["success"] = True
-            except Exception as e:
-                execution_result["error"] = e
-        
-        # 创建线程并运行
-        thread = threading.Thread(target=execute_code)
-        thread.daemon = True  # 设置为守护线程，确保主程序退出时线程也会退出
-        thread.start()
-        
-        # 等待线程完成或超时
-        thread.join(timeout=5)  # 5秒超时
-        
-        if thread.is_alive():
-            # 线程仍在运行，说明执行超时
-            print("Test timeout: 执行代码超时")
-            rewards.append(0.0)
-        else:
-            # 线程已结束，检查执行结果
-            if execution_result["success"]:
-                # 测试通过
+        try:
+            # 使用子进程运行代码，设置超时时间为5秒
+            result = subprocess.run(['python', temp_filename], 
+                                   capture_output=True, 
+                                   text=True, 
+                                   timeout=5)
+            
+            if result.returncode == 0:
+                # 返回码为0表示测试通过
                 rewards.append(1.0)
                 
                 # 记录成功样本
@@ -105,13 +94,27 @@ def correct_code_reward_func(prompts, completions, test_list, **kwargs):
                         f.write(f"\n\n==============\n")
                         f.write(f"Prompt:\n{prompt}\n\nGeneration:\n{generation}\n\nTest:\n{reference}\n")
             else:
-                # 测试失败
-                error = execution_result["error"]
-                print(f"Test failed with error: {str(error)}")
+                # 返回码非0表示测试失败
+                print(f"Test failed with error: {result.stderr}")
                 rewards.append(0.0)
+                
+        except subprocess.TimeoutExpired:
+            # 处理超时情况
+            print("Test timeout: 执行代码超时")
+            rewards.append(0.0)
+        except Exception as e:
+            # 处理其他异常
+            print(f"Execution error: {str(e)}")
+            rewards.append(0.0)
+        finally:
+            # 删除临时文件
+            try:
+                os.unlink(temp_filename)
+            except:
+                pass
         
         print(f"Reward: {rewards[-1]}")
-
+    
     return rewards
 
 
