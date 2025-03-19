@@ -80,7 +80,7 @@ def correct_code_reward_func(prompts, completions, test_list, **kwargs):
             result = subprocess.run(['python', temp_filename], 
                                    capture_output=True, 
                                    text=True, 
-                                   timeout=5)
+                                   timeout=10)
             
             if result.returncode == 0:
                 # 返回码为0表示测试通过
@@ -157,8 +157,8 @@ def grpo_function(
     # Load datasets
     ###############
     # Load dataset from Hugging Face Hub
-    dataset = load_dataset(script_args.dataset_id_or_path, split=script_args.dataset_splits)
-
+    train_dataset = load_dataset(script_args.dataset_id_or_path, split=script_args.dataset_splits)
+    test_dataset = load_dataset(script_args.dataset_id_or_path, split="test")
     #####################
     # Prepare and format dataset
     #####################
@@ -173,13 +173,10 @@ def grpo_function(
         return prompt
 
     # convert dataset to the prompt
-    dataset = dataset.map(lambda x: {"prompt": get_prompt(x)})
+    train_dataset = train_dataset.map(lambda x: {"prompt": get_prompt(x)})
 
-    # split the dataset into train and test
-    train_test_split = dataset.train_test_split(test_size=0.1)
-
-    train_dataset = train_test_split["train"]
-    test_dataset = train_test_split["test"]
+    
+    test_dataset = test_dataset.map(lambda x: {"prompt": get_prompt(x)})
 
     #########################
     # Instantiate DPO trainer
